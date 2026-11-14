@@ -1,7 +1,7 @@
 [project]
-name = "fetch-mcp"
+name = "search-mcp"
 version = "1.0.0"
-description = "Web search + fetch MCP server (curl_cffi) compatible with OpenCode and Claude Code"
+description = "Web search + fetch MCP server (Python, curl_cffi) over stdio"
 requires-python = ">=3.10"
 dependencies = [
     "mcp>=1.10,<2",
@@ -10,12 +10,11 @@ dependencies = [
 ]
 
 [project.scripts]
-fetch-mcp = "fetch_mcp.server:main"
+search-mcp = "search_mcp.server:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/fetch_mcp"]
-EOF
+packages = ["src/search_mcp"]

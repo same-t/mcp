@@ -1,8 +1,8 @@
 {
   "mcpServers": {
-    "fetch": {
+    "search": {
       "command": "python3",
-      "args": ["-m", "fetch_mcp.server"],
+      "args": ["-m", "search_mcp.server"],
       "env": {
         "PYTHONPATH": "src"
       }
