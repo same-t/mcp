@@ -3,7 +3,7 @@
   "mcp": {
     "browser": {
       "type": "local",
-      "command": ["python", "-m", "browser_mcp.server"],
+      "command": ["python3", "-m", "browser_mcp.server"],
       "environment": {
         "PYTHONPATH": "src",
         "SAMET_WORKSPACE": "."
