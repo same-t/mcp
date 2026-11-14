@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "fetch": {
+      "command": "python3",
+      "args": ["-m", "fetch_mcp.server"],
+      "env": {
+        "PYTHONPATH": "src"
+      }
+    }
+  }
+}
