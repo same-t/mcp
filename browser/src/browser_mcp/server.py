@@ -19,7 +19,7 @@ from mcp.server.fastmcp import FastMCP
 
 from .browser_session import BrowserSession, INSTALL_HINT
 
-mcp = FastMCP("samet-browser")
+mcp = FastMCP("browser-mcp")
 
 _bs: BrowserSession | None = None
 
@@ -1151,9 +1151,10 @@ async def browser_network(
 ) -> str:
     """List or inspect captured CDP network traffic.
 
-    Capture filter: only HTTP requests (type="request"), JavaScript
-    (type="js") and WebSockets (type="wss") are recorded. Images, media,
-    fonts, CSS and documents are NOT captured at all — the buffer stays clean.
+    Capture filter: HTTP requests (type="request"), JavaScript (type="js"),
+    WebSockets (type="wss") and top-level documents (type="doc") are
+    recorded. Images, media, fonts, CSS and other noise are NOT captured —
+    the buffer stays clean.
 
     Workflows:
       1. Overview List: Call `browser_network(limit=0)` to get ALL captured requests with NO limit.

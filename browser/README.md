@@ -11,8 +11,7 @@ files (`.mcp.json` and `opencode.json`).
 
 ```bash
 cd browser
-pip install -e .            # core (mcp)
-pip install "seleniumbase>=4.40"   # browser backend (optional but required for tools)
+pip install -e ".[all]"     # includes seleniumbase browser backend
 ```
 
 Chrome must be installed on the machine (UC mode uses real Chrome).
