@@ -79,11 +79,69 @@ def _decode_ddg_url(href: str) -> str:
     return href
 
 
-def _search_ddg(query: str, max_results: int) -> list[tuple[str, str, str]]:
-    url = "https://lite.duckduckgo.com/lite/?q=" + quote(query)
+def _normalize_domain(url: str) -> str:
+    return urlparse(url).netloc.lower().removeprefix("www.")
+
+
+def _domain_allowed(url: str, include: list[str] | None, exclude: list[str] | None) -> bool:
+    domain = _normalize_domain(url)
+    if include:
+        if not any(domain == d.lower().removeprefix("www.") or domain.endswith("." + d.lower().removeprefix("www.")) for d in include):
+            return False
+    if exclude:
+        if any(domain == d.lower().removeprefix("www.") or domain.endswith("." + d.lower().removeprefix("www.")) for d in exclude):
+            return False
+    return True
+
+
+def _dedup_results(results: list[dict]) -> list[dict]:
+    seen: set[str] = set()
+    out: list[dict] = []
+    for r in results:
+        key = r.get("url", "").strip().lower().rstrip("/")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out
+
+
+def _fetch_ddg_page(query: str, page: int) -> str:
+    """Fetch one page of DuckDuckGo Lite results.
+
+    Page 1 is a plain GET. Subsequent pages require the ``vqd`` token that DDG
+    embeds in the first page, so we fetch page 1 first to obtain it.
+    """
+    base = "https://lite.duckduckgo.com/lite/?q=" + quote(query)
+    if page <= 1:
+        html, _ = _fetch(base)
+        return html
+    # Obtain vqd token from the first page.
+    first_html, _ = _fetch(base)
+    first_soup = BeautifulSoup(first_html, "html.parser")
+    vqd_input = first_soup.find("input", {"name": "vqd"})
+    vqd = vqd_input.get("value", "") if vqd_input else ""
+    offset = (page - 1) * 10
+    url = (
+        "https://lite.duckduckgo.com/lite/?q=" + quote(query)
+        + f"&s={offset}&dc={offset + 1}&v=l&o=json&api=d.js&kl=wt-wt"
+    )
+    if vqd:
+        url += "&vqd=" + quote(vqd) + "&nextParams="
     html, _ = _fetch(url)
+    return html
+
+
+def _search_ddg(
+    query: str,
+    max_results: int,
+    page: int = 1,
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
+) -> list[dict]:
+    html = _fetch_ddg_page(query, page)
     soup = BeautifulSoup(html, "html.parser")
-    results: list[tuple[str, str, str]] = []
+    results: list[dict] = []
     for a in soup.find_all("a", class_="result-link"):
         if len(results) >= max_results:
             break
@@ -97,21 +155,38 @@ def _search_ddg(query: str, max_results: int) -> list[tuple[str, str, str]]:
                 td = nxt.find("td", class_="result-snippet")
                 if td:
                     snippet = td.get_text(" ", strip=True)
-        if not title:
+        if not title or not _domain_allowed(href, include_domains, exclude_domains):
             continue
-        results.append((title, href, snippet))
+        results.append({"title": title, "url": href, "snippet": snippet})
     return results
 
 
 @mcp.tool()
-def web_search(query: str, max_results: int = 8) -> str:
-    """Search the web via DuckDuckGo Lite. Returns JSON list of {title,url,snippet}."""
+def web_search(
+    query: str,
+    max_results: int = 8,
+    page: int = 1,
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
+) -> str:
+    """Search the web via DuckDuckGo Lite.
+
+    Returns structured JSON: {query, page, provider, results:[{title,url,snippet}]}.
+    Supports pagination (page) and domain filtering (include_domains/exclude_domains).
+    """
     if not isinstance(query, str) or not query.strip():
         raise ValueError("query must be a non-empty string")
     max_results = _clamp_int(max_results, 8, 1, 20)
-    results = _search_ddg(query.strip(), max_results)
+    page = _clamp_int(page, 1, 1, 50)
+    results = _search_ddg(query.strip(), max_results, page, include_domains, exclude_domains)
     return json.dumps(
-        [{"title": t, "url": u, "snippet": s} for t, u, s in results],
+        {
+            "query": query.strip(),
+            "page": page,
+            "provider": "duckduckgo-lite",
+            "count": len(results),
+            "results": results,
+        },
         ensure_ascii=False,
         indent=2,
     )
@@ -170,33 +245,167 @@ def fetch_urls(urls: list[str], max_chars: int = 8000) -> str:
 
 
 @mcp.tool()
-def search_and_fetch(query: str, max_results: int = 3, max_chars_per_page: int = 6000) -> str:
+def search_and_fetch(
+    query: str,
+    max_results: int = 3,
+    max_chars_per_page: int = 6000,
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
+) -> str:
     """Search the web then fetch details of top results."""
     if not isinstance(query, str) or not query.strip():
         raise ValueError("query must be a non-empty string")
     max_results = _clamp_int(max_results, 3, 1, 5)
     max_chars_per_page = _clamp_int(max_chars_per_page, 6000, 100, 200000)
 
-    results = _search_ddg(query.strip(), max_results)
+    results = _search_ddg(query.strip(), max_results, 1, include_domains, exclude_domains)
 
     lines = [f"QUERY: {query.strip()}\n"]
     # Fetch pages in parallel while preserving result order.
-    urls = [r[1] for r in results]
+    urls = [r["url"] for r in results]
     with ThreadPoolExecutor(max_workers=min(len(urls), 5) or 1) as ex:
         futures = [ex.submit(_fetch_one, u, max_chars_per_page) for u in urls]
         fetched = [f.result() for f in futures]
 
-    for i, (title, href, snippet) in enumerate(results, 1):
-        lines.append(f"### Result {i}: {title}\nURL: {href}\nSnippet: {snippet}\n")
+    for i, r in enumerate(results, 1):
+        lines.append(f"### Result {i}: {r['title']}\nURL: {r['url']}\nSnippet: {r['snippet']}\n")
         # _fetch_one includes its own "=== url ===" header; strip it for readability.
         body = fetched[i - 1]
-        marker = f"=== {href} ===\n"
+        marker = f"=== {r['url']} ===\n"
         if body.startswith(marker):
             body = body[len(marker):]
         if body.endswith("\n"):
             body = body[:-1]
         lines.append(f"CONTENT:\n{body}\n\n---\n")
     return "\n".join(lines)
+
+
+@mcp.tool()
+def search_parallel(
+    queries: list[str],
+    max_results_per_query: int = 5,
+    page: int = 1,
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
+) -> str:
+    """Run multiple search queries in parallel and return deduplicated results.
+
+    Returns structured JSON: {queries, total, results:[{title,url,snippet,query}]}.
+    """
+    if not isinstance(queries, list) or not queries:
+        raise ValueError("queries must be a non-empty list of strings")
+    cleaned = [str(q).strip() for q in queries if str(q).strip()]
+    if not cleaned:
+        raise ValueError("queries must contain at least one non-empty string")
+    max_results_per_query = _clamp_int(max_results_per_query, 5, 1, 20)
+    page = _clamp_int(page, 1, 1, 50)
+
+    def _run(q: str) -> list[dict]:
+        rows = _search_ddg(q, max_results_per_query, page, include_domains, exclude_domains)
+        for r in rows:
+            r["query"] = q
+        return rows
+
+    with ThreadPoolExecutor(max_workers=min(len(cleaned), 8)) as ex:
+        futures = [ex.submit(_run, q) for q in cleaned]
+        all_rows: list[dict] = []
+        for f in futures:
+            all_rows.extend(f.result())
+
+    deduped = _dedup_results(all_rows)
+    return json.dumps(
+        {
+            "queries": cleaned,
+            "page": page,
+            "total_raw": len(all_rows),
+            "total_deduped": len(deduped),
+            "results": deduped,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+@mcp.tool()
+def deep_search(
+    query: str,
+    queries: list[str] | None = None,
+    max_results: int = 8,
+    fetch_top_n: int = 5,
+    max_chars_per_page: int = 6000,
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
+) -> str:
+    """Deep research: search (optionally multiple queries) in parallel, deduplicate,
+    then fetch top pages. Returns structured JSON with sources and extracted content.
+
+    Intended to support a research loop: plan sub-queries, call deep_search, then
+    inspect results and issue follow-up searches for gaps.
+    """
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError("query must be a non-empty string")
+    if queries is None:
+        queries = [query.strip()]
+    else:
+        queries = [str(q).strip() for q in queries if str(q).strip()]
+        if not queries:
+            queries = [query.strip()]
+    max_results = _clamp_int(max_results, 8, 1, 20)
+    fetch_top_n = _clamp_int(fetch_top_n, 5, 0, 10)
+    max_chars_per_page = _clamp_int(max_chars_per_page, 6000, 100, 200000)
+
+    def _run(q: str) -> list[dict]:
+        rows = _search_ddg(q, max_results, 1, include_domains, exclude_domains)
+        for r in rows:
+            r["query"] = q
+        return rows
+
+    with ThreadPoolExecutor(max_workers=min(len(queries), 8)) as ex:
+        futures = [ex.submit(_run, q) for q in queries]
+        all_rows: list[dict] = []
+        for f in futures:
+            all_rows.extend(f.result())
+
+    deduped = _dedup_results(all_rows)
+
+    urls = [r["url"] for r in deduped[:fetch_top_n]]
+    fetched_map: dict[str, str] = {}
+    if urls:
+        with ThreadPoolExecutor(max_workers=min(len(urls), 8)) as ex:
+            futures = {ex.submit(_fetch_one, u, max_chars_per_page): u for u in urls}
+            for fut, u in futures.items():
+                fetched_map[u] = fut.result()
+
+    fetched_list = []
+    for r in deduped[:fetch_top_n]:
+        body = fetched_map.get(r["url"], "")
+        marker = f"=== {r['url']} ===\\n"
+        if body.startswith(marker):
+            body = body[len(marker):]
+        if body.endswith("\\n"):
+            body = body[:-1]
+        fetched_list.append(
+            {
+                "title": r["title"],
+                "url": r["url"],
+                "snippet": r["snippet"],
+                "query": r.get("query"),
+                "content": body,
+            }
+        )
+
+    return json.dumps(
+        {
+            "query": query.strip(),
+            "queries": queries,
+            "total_raw": len(all_rows),
+            "total_deduped": len(deduped),
+            "results": deduped,
+            "fetched": fetched_list,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 def main() -> None:

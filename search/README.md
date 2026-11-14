@@ -3,10 +3,12 @@
 Web search + fetch MCP server (Python) over stdio.
 
 ## Tools
-- `web_search(query, max_results)` — DuckDuckGo Lite search, returns title/url/snippet.
+- `web_search(query, max_results, page, include_domains, exclude_domains)` — DuckDuckGo Lite search with pagination and domain filtering. Returns structured JSON.
 - `fetch_url(url, max_chars)` — fetch URL and return readable text.
 - `fetch_urls(urls, max_chars)` — fetch multiple URLs in parallel.
-- `search_and_fetch(query, max_results, max_chars_per_page)` — search then fetch top pages.
+- `search_and_fetch(query, max_results, max_chars_per_page, include_domains, exclude_domains)` — search then fetch top pages.
+- `search_parallel(queries, max_results_per_query, page, include_domains, exclude_domains)` — run multiple queries in parallel and deduplicate results.
+- `deep_search(query, queries, max_results, fetch_top_n, max_chars_per_page, include_domains, exclude_domains)` — parallel multi-query search, deduplication, and content extraction for research workflows.
 
 ## Install
 
@@ -23,10 +25,6 @@ Or run without installing:
 cd search
 PYTHONPATH=src python3 -m search_mcp.server
 ```
-
-## Build (not required)
-
-No build step; pure Python.
 
 ## OpenCode config
 
